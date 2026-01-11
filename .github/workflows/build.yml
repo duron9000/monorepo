@@ -1,4 +1,4 @@
-name: Quilibrium Final Build (No Path Conflict)
+name: Quilibrium Final Fix (Linker Search Path)
 
 on:
   workflow_dispatch:
@@ -13,32 +13,26 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
+      # 1. 安装系统底层依赖
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 1. 顺序安装 EMP-Toolkit (使用唯一目录名避开 128 错误)
+      # 2. 顺序安装 EMP-Toolkit (物理路径安装)
       - name: Install EMP Toolkit
         run: |
-          # A. 安装 emp-tool
+          # 安装 emp-tool
           rm -rf emp-tool-repo
           git clone https://github.com/emp-toolkit/emp-tool.git emp-tool-repo
-          cd emp-tool-repo
-          cmake . -DBUILD_SHARED_LIBS=OFF
-          make -j$(nproc)
-          sudo make install
-          cd ..
+          cd emp-tool-repo && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
           
-          # B. 安装 emp-ot
+          # 安装 emp-ot
           rm -rf emp-ot-repo
           git clone https://github.com/emp-toolkit/emp-ot.git emp-ot-repo
-          cd emp-ot-repo
-          cmake . -DBUILD_SHARED_LIBS=OFF -DCMAKE_PREFIX_PATH=/usr/local
-          make -j$(nproc)
-          sudo make install
-          cd ..
+          cd emp-ot-repo && cmake . -DBUILD_SHARED_LIBS=OFF -DCMAKE_PREFIX_PATH=/usr/local && make -j$(nproc) && sudo make install && cd ..
           
+          # 刷新库索引
           sudo ldconfig
 
       - name: Set up Go
@@ -49,23 +43,27 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 2. 编译 Rust 静态库
+      # 3. 编译 Rust 静态库 (增加 RUSTFLAGS 解决链接错误)
       - name: Build Ferret Library
         run: |
           cd crates/ferret
+          
+          # 关键点：使用 RUSTFLAGS 告诉 cargo 链接器在 /usr/local/lib 中寻找 native 库
+          export RUSTFLAGS="-L native=/usr/local/lib"
           export LIBRARY_PATH="/usr/local/lib:$LIBRARY_PATH"
           export CPATH="/usr/local/include"
+          
           cargo build --release
           
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
 
-      # 3. 最终编译 Go 节点
+      # 4. 最终编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
           export CGO_ENABLED=1
-          # 显式链接所有底层 C++ 库
+          # Go 阶段同样需要指定路径
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
