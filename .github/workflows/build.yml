@@ -1,4 +1,4 @@
-name: Remote Build Quilibrium Node (Auto-Path)
+name: Remote Build Quilibrium Node (Final)
 
 on:
   workflow_dispatch:
@@ -7,12 +7,11 @@ jobs:
   build-node:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Original Repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
-          fetch-depth: 1
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -20,32 +19,29 @@ jobs:
           go-version: '1.22'
           cache: false
 
-      - name: Build Quilibrium Node
+      - name: Build
         run: |
-          # 1. 查找 libferret.a 文件的真实位置
-          # 这样无论官方把它放在 node/lib 还是 node/lib/linux-amd64 都能找到
-          LIB_PATH=$(find . -name "libferret.a" -exec dirname {} + | head -n 1)
-          ABS_LIB_PATH=$(pwd)/${LIB_PATH#./}
-          
-          echo "Found libferret.a at: $ABS_LIB_PATH"
-          
-          # 2. 进入 node 目录进行编译
+          # 1. 强制进入 node 目录
           cd node
           
-          # 3. 设置 CGO 环境
+          # 2. 这里的核心改动：我们直接把 .a 文件拷贝到当前目录，确保链接器百分百能看到
+          # 在 v2.1.0.18 中，libferret.a 实际位于 node/lib/linux-amd64/
+          mkdir -p ./lib_temp
+          cp lib/linux-amd64/libferret.a ./lib_temp/
+          
+          # 3. 设置 CGO 参数
           export CGO_ENABLED=1
+          # 使用 -L. 告诉链接器就在当前临时目录下找
+          export CGO_LDFLAGS="-L$(pwd)/lib_temp -lferret -lm -ldl -lpthread"
           
-          # 4. 动态设置链接路径
-          # 我们把找到的绝对路径传给 LDFLAGS
-          export CGO_LDFLAGS="-L$ABS_LIB_PATH -lferret -lm -ldl -lpthread"
-          
-          echo "Starting build with LDFLAGS: $CGO_LDFLAGS"
+          # 4. 强制不让 Go 自动下载 1.24，使用环境中的 1.22
+          export GOTOOLCHAIN=local
           
           go mod download
           go build -v -o qnode-linux-amd64 main.go
 
-      - name: Upload Binary Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: quilibrium-v2.1.0.18-linux
+          name: quilibrium-binary
           path: node/qnode-linux-amd64
