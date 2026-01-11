@@ -1,4 +1,4 @@
-name: Full Build Quilibrium (Final Linker Fix)
+name: Quilibrium Ultimate Build (Linker Force Fix)
 
 on:
   workflow_dispatch:
@@ -13,27 +13,31 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
-      # 1. 安装系统依赖
+      # 1. 环境准备
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 2. 安装 EMP-Toolkit (强制生成静态库并刷新 ldconfig)
-      - name: Install EMP-Toolkit
+      # 2. 编译并物理定位 EMP 静态库
+      - name: Build and Locate EMP Libraries
         run: |
-          # 安装 emp-tool
-          rm -rf emp-tool
+          # 编译 emp-tool
           git clone https://github.com/emp-toolkit/emp-tool.git
           cd emp-tool && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
           
-          # 安装 emp-ot
-          rm -rf emp-ot
+          # 编译 emp-ot
           git clone https://github.com/emp-toolkit/emp-ot.git
           cd emp-ot && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
-          
-          # 刷新系统库缓存
-          sudo ldconfig
+
+          # 【关键点】强制将生成的 .a 文件拷贝到 ferret 源码目录
+          # 这样 Rust 编译时在当前目录及其搜索路径下绝对能找到它们
+          mkdir -p crates/ferret/lib
+          cp /usr/local/lib/libemp-tool.a crates/ferret/
+          cp /usr/local/lib/libemp-ot.a crates/ferret/
+          # 有些版本可能需要加 lib 前缀或去掉，我们多备一份
+          cp /usr/local/lib/libemp-tool.a crates/ferret/libemp-tool.a
+          cp /usr/local/lib/libemp-ot.a crates/ferret/libemp-ot.a
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -43,14 +47,13 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 编译 Rust 静态库 (核心修复：增加 LIBRARY_PATH)
+      # 3. 编译 Rust 静态库
       - name: Build Ferret Library
         run: |
           cd crates/ferret
-          # 告诉 Rust 在哪里寻找 emp-tool.a 和 emp-ot.a
-          export LIBRARY_PATH="/usr/local/lib:$LIBRARY_PATH"
-          export CPATH="/usr/local/include"
-          
+          # 告诉 Rust 在当前目录和系统目录找库
+          export RUSTFLAGS="-L native=$(pwd) -L native=/usr/local/lib"
+          export LIBRARY_PATH="$(pwd):/usr/local/lib"
           cargo build --release
           
           mkdir -p ../../node/lib/linux-amd64/
@@ -61,7 +64,7 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          # 链接所有相关路径
+          # Go 链接阶段也需要这些 C++ 静态库
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
@@ -71,5 +74,5 @@ jobs:
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: quilibrium-v2.1.0.18-final
+          name: qnode-v2.1.0.18-standalone
           path: node/qnode-linux-amd64
