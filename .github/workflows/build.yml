@@ -1,4 +1,4 @@
-name: Precise Build Quilibrium (Rust 1.75+ & Go)
+name: Precise Build Quilibrium (Full Dependency Fix)
 
 on:
   workflow_dispatch:
@@ -13,36 +13,42 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
+      # 1. 安装缺少的 C++ 编译环境和加密依赖库
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libssl-dev pkg-config
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
-      # 1. 安装最新的稳定版 Rust (支持 Edition 2021)
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
-      # 2. 编译指定的 ferret 库
+      # 2. 编译 Ferret 库
       - name: Build Ferret Library
         run: |
-          # 直接进入核心库目录，避免 find 报错
+          # 修复可能存在的 git 权限问题
+          git config --global --add safe.directory "*"
+          
           cd crates/ferret
+          # 这里会自动调用 gcc/g++ 编译 C++ 桥接代码
           cargo build --release
           
-          # 确保目标目录存在并拷贝静态库
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
-          echo "Successfully built and moved libferret.a"
+          echo "Successfully built libferret.a"
 
       # 3. 编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
           export CGO_ENABLED=1
-          # 链接到我们刚刚编译出的库
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lm -ldl -lpthread"
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lssl -lcrypto -lm -ldl -lpthread"
           export GOTOOLCHAIN=local
           
           go mod download
