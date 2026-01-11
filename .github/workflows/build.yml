@@ -1,4 +1,4 @@
-name: Remote Build Quilibrium Node
+name: Remote Build Quilibrium Node (Final Fix)
 
 on:
   workflow_dispatch:
@@ -24,11 +24,16 @@ jobs:
         working-directory: ./node
         run: |
           go mod download
-          # 关键点：
-          # 1. 开启 CGO
-          # 2. 这里的参数可能需要根据仓库内静态库的实际位置调整
-          # 官方仓库中 linux-amd64 的库通常在 node/lib 目录下
+          
+          # 1. 明确 CGO 开启
           export CGO_ENABLED=1
+          
+          # 2. 关键：手动指定静态库的搜索路径
+          # 在 v2.1.0.18 中，库文件位于 node/lib/linux-amd64
+          # 我们需要将这个绝对路径传递给链接器
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lm -ldl"
+          
+          # 3. 执行编译
           go build -v -o qnode-linux-amd64 main.go
 
       - name: Upload Binary Artifact
