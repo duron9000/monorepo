@@ -1,4 +1,4 @@
-name: Quilibrium Sequential Build (Dependency Chain Fix)
+name: Quilibrium Final Build (No Path Conflict)
 
 on:
   workflow_dispatch:
@@ -18,27 +18,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 1. 顺序安装 EMP-Toolkit
-      - name: Install EMP Toolkit (Sequential)
+      # 1. 顺序安装 EMP-Toolkit (使用唯一目录名避开 128 错误)
+      - name: Install EMP Toolkit
         run: |
-          # A. 安装 emp-tool (基础库)
-          git clone https://github.com/emp-toolkit/emp-tool.git
-          cd emp-tool
+          # A. 安装 emp-tool
+          rm -rf emp-tool-repo
+          git clone https://github.com/emp-toolkit/emp-tool.git emp-tool-repo
+          cd emp-tool-repo
           cmake . -DBUILD_SHARED_LIBS=OFF
           make -j$(nproc)
           sudo make install
           cd ..
           
-          # B. 安装 emp-ot (依赖 emp-tool)
-          git clone https://github.com/emp-toolkit/emp-ot.git
-          cd emp-ot
-          # 明确告诉 CMake 去 /usr/local 找上一步安装的东西
+          # B. 安装 emp-ot
+          rm -rf emp-ot-repo
+          git clone https://github.com/emp-toolkit/emp-ot.git emp-ot-repo
+          cd emp-ot-repo
           cmake . -DBUILD_SHARED_LIBS=OFF -DCMAKE_PREFIX_PATH=/usr/local
           make -j$(nproc)
           sudo make install
           cd ..
           
-          # 刷新动态库缓存（虽然我们用的是静态库，但这是好习惯）
           sudo ldconfig
 
       - name: Set up Go
@@ -49,14 +49,12 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 2. 编译 Rust 静态库 (指向系统安装路径)
+      # 2. 编译 Rust 静态库
       - name: Build Ferret Library
         run: |
           cd crates/ferret
-          # 此时 libemp-tool.a 和 libemp-ot.a 应该已经在 /usr/local/lib 了
           export LIBRARY_PATH="/usr/local/lib:$LIBRARY_PATH"
           export CPATH="/usr/local/include"
-          
           cargo build --release
           
           mkdir -p ../../node/lib/linux-amd64/
@@ -67,7 +65,7 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          # 链接所有路径
+          # 显式链接所有底层 C++ 库
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
