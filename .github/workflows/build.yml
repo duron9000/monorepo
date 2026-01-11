@@ -1,4 +1,4 @@
-name: Quilibrium Ultimate Build (Path Auto-Discovery)
+name: Quilibrium Ultimate Build (Direct Source Link)
 
 on:
   workflow_dispatch:
@@ -13,24 +13,33 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
-      # 1. 安装基础环境
+      # 1. 安装系统底层工具
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 2. 编译并安装 EMP (使用动态路径搜索)
-      - name: Build and Install EMP Toolkit
+      # 2. 编译 EMP 并手动提取库文件
+      - name: Build EMP and Extract Libraries
         run: |
-          # 编译 emp-tool
-          rm -rf emp-tool-src
+          # 创建一个专门存放静态库的文件夹
+          mkdir -p $(pwd)/static_libs
+          
+          # 编译 emp-tool (强制静态编译)
           git clone https://github.com/emp-toolkit/emp-tool.git emp-tool-src
-          cd emp-tool-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
+          cd emp-tool-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc)
+          # 直接从当前目录找 .a 文件
+          find . -name "libemp-tool.a" -exec cp {} $(pwd)/../static_libs/ \;
+          cd ..
           
           # 编译 emp-ot
-          rm -rf emp-ot-src
           git clone https://github.com/emp-toolkit/emp-ot.git emp-ot-src
-          cd emp-ot-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
+          cd emp-ot-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc)
+          find . -name "libemp-ot.a" -exec cp {} $(pwd)/../static_libs/ \;
+          cd ..
+          
+          echo "STATIC_LIBS_PATH=$(pwd)/static_libs" >> $GITHUB_ENV
+          ls -l $(pwd)/static_libs/
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -40,34 +49,20 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 编译 Rust 静态库 (动态定位 .a 文件)
+      # 3. 编译 Rust 静态库 (指向提取出的目录)
       - name: Build Ferret Library
         run: |
           cd crates/ferret
           
-          # 动态搜索刚才安装的 libemp-tool.a 和 libemp-ot.a
-          # 考虑到可能在 /usr/local/lib 或 /usr/local/lib64
-          EMP_TOOL_A=$(sudo find /usr/local/lib /usr/lib -name "libemp-tool.a" | head -n 1)
-          EMP_OT_A=$(sudo find /usr/local/lib /usr/lib -name "libemp-ot.a" | head -n 1)
+          # 将提取出的库拷贝到 ferret 目录，确保 Rust 绝对能看到
+          cp ${{ env.STATIC_LIBS_PATH }}/*.a .
           
-          if [ -z "$EMP_TOOL_A" ] || [ -z "$EMP_OT_A" ]; then
-            echo "Error: Could not find EMP static libraries!"
-            exit 1
-          fi
-          
-          echo "Found libemp-tool at: $EMP_TOOL_A"
-          echo "Found libemp-ot at: $EMP_OT_A"
-          
-          # 物理拷贝到当前目录以供 Rust 链接
-          cp "$EMP_TOOL_A" .
-          cp "$EMP_OT_A" .
-          
-          # 设置链接环境变量
           export RUSTFLAGS="-L native=$(pwd)"
-          export LIBRARY_PATH="$(pwd):/usr/local/lib"
+          export LIBRARY_PATH="$(pwd):$LIBRARY_PATH"
+          export CPATH="/usr/local/include" # emp 的头文件通常还是需要系统路径
+          
           cargo build --release
           
-          # 准备 Go 的库目录
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
 
@@ -75,10 +70,12 @@ jobs:
       - name: Build Go Node
         run: |
           cd node
-          # 再次确认库文件路径
-          LIB_DIR=$(pwd)/lib/linux-amd64
+          # 整合所有提取出的静态库
+          mkdir -p ./lib/linux-amd64/
+          cp ${{ env.STATIC_LIBS_PATH }}/*.a ./lib/linux-amd64/
+          
           export CGO_ENABLED=1
-          export CGO_LDFLAGS="-L$LIB_DIR -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
           go mod download
@@ -87,5 +84,5 @@ jobs:
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: qnode-v2.1.0.18-final
+          name: qnode-v2.1.0.18-standalone
           path: node/qnode-linux-amd64
