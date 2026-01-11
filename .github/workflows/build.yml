@@ -70,8 +70,9 @@ jobs:
       - name: Patch ferret build.rs
         run: |
           cd crates/ferret
-          echo "=== Original build.rs (first 40 lines) ==="
-          head -n 40 build.rs
+          echo "=== COMPLETE Original build.rs ==="
+          cat build.rs
+          echo "=== END Original build.rs ==="
           
           cat > build_prepend.txt << 'EOF'
               // === PATCHED: Add library search paths ===
@@ -96,11 +97,26 @@ jobs:
           
           EOF
           
-          awk '/^fn main\(\) \{$/ {print; system("cat build_prepend.txt"); next} 1' build.rs > build.rs.new
+          # Try multiple patterns to find fn main()
+          if grep -q "^fn main() {$" build.rs; then
+            echo "Found pattern: fn main() {"
+            awk '/^fn main\(\) \{$/ {print; system("cat build_prepend.txt"); next} 1' build.rs > build.rs.new
+          elif grep -q "^fn main(){$" build.rs; then
+            echo "Found pattern: fn main(){"
+            awk '/^fn main\(\)\{$/ {print; system("cat build_prepend.txt"); next} 1' build.rs > build.rs.new
+          elif grep -q "fn main()" build.rs; then
+            echo "Found pattern: fn main() (generic)"
+            awk '/fn main\(\)/ {print; system("cat build_prepend.txt"); next} 1' build.rs > build.rs.new
+          else
+            echo "ERROR: Could not find fn main() pattern"
+            exit 1
+          fi
+          
           mv build.rs.new build.rs
           
-          echo "=== Patched build.rs (first 60 lines) ==="
-          head -n 60 build.rs
+          echo "=== COMPLETE Patched build.rs ==="
+          cat build.rs
+          echo "=== END Patched build.rs ==="
 
       - name: Build Ferret Library
         run: |
