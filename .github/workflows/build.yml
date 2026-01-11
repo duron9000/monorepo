@@ -1,4 +1,4 @@
-name: Full Build Quilibrium (Compile Rust + Go)
+name: Precise Build Quilibrium (Rust 1.75+ & Go)
 
 on:
   workflow_dispatch:
@@ -18,35 +18,31 @@ jobs:
         with:
           go-version: '1.22'
 
-      # 1. 安装 Rust 环境（因为 libferret 是用 Rust 写的）
+      # 1. 安装最新的稳定版 Rust (支持 Edition 2021)
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
 
-      # 2. 编译 Rust 静态库
-      - name: Build Ferret Library (Rust)
+      # 2. 编译指定的 ferret 库
+      - name: Build Ferret Library
         run: |
-          # 查找包含 ferret 源码的目录并进入
-          # 通常路径在 monorepo/lib/ferret 或类似位置
-          FERRET_PATH=$(find . -name "Cargo.toml" -exec dirname {} + | head -n 1)
-          echo "Building Rust library in $FERRET_PATH"
-          cd $FERRET_PATH
+          # 直接进入核心库目录，避免 find 报错
+          cd crates/ferret
           cargo build --release
           
-          # 查找生成的 .a 文件并移动到 Go 编译器能找到的地方
-          # 默认生成的路径在 target/release/libferret.a
-          LIB_FILE=$(find ./target/release -name "libferret.a")
+          # 确保目标目录存在并拷贝静态库
           mkdir -p ../../node/lib/linux-amd64/
-          cp $LIB_FILE ../../node/lib/linux-amd64/
-          echo "Library moved to node/lib/linux-amd64/"
+          cp target/release/libferret.a ../../node/lib/linux-amd64/
+          echo "Successfully built and moved libferret.a"
 
       # 3. 编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
           export CGO_ENABLED=1
-          # 强制指定链接路径
+          # 链接到我们刚刚编译出的库
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lm -ldl -lpthread"
-          # 锁定工具链
           export GOTOOLCHAIN=local
           
           go mod download
@@ -55,5 +51,5 @@ jobs:
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: quilibrium-v2.1.0.18-built-from-source
+          name: quilibrium-v2.1.0.18-final
           path: node/qnode-linux-amd64
