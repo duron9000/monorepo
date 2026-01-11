@@ -1,4 +1,4 @@
-name: Quilibrium Ultimate Build (Direct Source Link)
+name: Quilibrium Ultimate Build (Absolute Path Fix)
 
 on:
   workflow_dispatch:
@@ -13,33 +13,33 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
-      # 1. 安装系统底层工具
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 2. 编译 EMP 并手动提取库文件
-      - name: Build EMP and Extract Libraries
+      # 1. 编译 EMP 并使用绝对路径精确提取
+      - name: Build EMP and Precise Extract
         run: |
-          # 创建一个专门存放静态库的文件夹
-          mkdir -p $(pwd)/static_libs
+          # 创建绝对路径的存放目录
+          mkdir -p $HOME/compiled_libs
           
-          # 编译 emp-tool (强制静态编译)
+          # 编译 emp-tool
           git clone https://github.com/emp-toolkit/emp-tool.git emp-tool-src
           cd emp-tool-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc)
-          # 直接从当前目录找 .a 文件
-          find . -name "libemp-tool.a" -exec cp {} $(pwd)/../static_libs/ \;
+          # 搜寻生成的静态库并拷贝
+          find $(pwd) -name "libemp-tool.a" -exec cp {} $HOME/compiled_libs/ \;
           cd ..
           
           # 编译 emp-ot
           git clone https://github.com/emp-toolkit/emp-ot.git emp-ot-src
           cd emp-ot-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc)
-          find . -name "libemp-ot.a" -exec cp {} $(pwd)/../static_libs/ \;
+          find $(pwd) -name "libemp-ot.a" -exec cp {} $HOME/compiled_libs/ \;
           cd ..
-          
-          echo "STATIC_LIBS_PATH=$(pwd)/static_libs" >> $GITHUB_ENV
-          ls -l $(pwd)/static_libs/
+
+          # 验证并导出
+          ls -R $HOME/compiled_libs/
+          echo "LIBS_DIR=$HOME/compiled_libs" >> $GITHUB_ENV
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -49,30 +49,32 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 编译 Rust 静态库 (指向提取出的目录)
+      # 2. 编译 Rust 静态库
       - name: Build Ferret Library
         run: |
           cd crates/ferret
           
-          # 将提取出的库拷贝到 ferret 目录，确保 Rust 绝对能看到
-          cp ${{ env.STATIC_LIBS_PATH }}/*.a .
+          # 从环境变量中拷贝库文件
+          cp ${{ env.LIBS_DIR }}/libemp-tool.a .
+          cp ${{ env.LIBS_DIR }}/libemp-ot.a .
           
           export RUSTFLAGS="-L native=$(pwd)"
-          export LIBRARY_PATH="$(pwd):$LIBRARY_PATH"
-          export CPATH="/usr/local/include" # emp 的头文件通常还是需要系统路径
+          export LIBRARY_PATH="$(pwd)"
+          export CPATH="/usr/local/include"
           
           cargo build --release
           
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
 
-      # 4. 最终编译 Go 节点
+      # 3. 编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
-          # 整合所有提取出的静态库
+          # 拷贝所有底层库到 node 链接目录
           mkdir -p ./lib/linux-amd64/
-          cp ${{ env.STATIC_LIBS_PATH }}/*.a ./lib/linux-amd64/
+          cp ${{ env.LIBS_DIR }}/libemp-tool.a ./lib/linux-amd64/
+          cp ${{ env.LIBS_DIR }}/libemp-ot.a ./lib/linux-amd64/
           
           export CGO_ENABLED=1
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
@@ -84,5 +86,5 @@ jobs:
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: qnode-v2.1.0.18-standalone
+          name: qnode-v2.1.0.18-final
           path: node/qnode-linux-amd64
