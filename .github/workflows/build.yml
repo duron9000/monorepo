@@ -1,4 +1,4 @@
-name: Quilibrium Build Fixed
+name: Quilibrium v2.1.0.18 Complete Build
 
 on:
   workflow_dispatch:
@@ -6,8 +6,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout Code
+      - name: Checkout Quilibrium Repository
         uses: actions/checkout@v4
         with:
           repository: 'QuilibriumNetwork/monorepo'
@@ -18,7 +19,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libgmp-dev
 
-      - name: Install Relic Toolkit with GMP preset
+      - name: Install Relic Toolkit
         run: |
           rm -rf relic
           git clone https://github.com/relic-toolkit/relic.git
@@ -29,10 +30,13 @@ jobs:
           sudo make install
           cd ../..
           sudo ldconfig
+          echo "=== Relic installed ==="
+          ls -la /usr/local/lib/librelic*.a
 
-      - name: Install EMP Toolkit
+      - name: Install EMP Toolkit Headers
         run: |
           rm -rf emp-tool emp-ot
+          
           git clone https://github.com/emp-toolkit/emp-tool.git
           cd emp-tool
           cmake . -DCMAKE_BUILD_TYPE=Release
@@ -45,103 +49,121 @@ jobs:
           sudo make install
           cd ..
           
-          echo "=== Verifying EMP headers and relic library ==="
-          ls -la /usr/local/include/emp-tool/ | head -10
-          ls -la /usr/local/include/emp-ot/ | head -10
-          ls -la /usr/local/lib/librelic*.a
+          echo "=== EMP headers installed ==="
+          ls -la /usr/local/include/emp-tool/ | head -5
+          ls -la /usr/local/include/emp-ot/ | head -5
 
-      - name: Set up Go
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'  # 更新到项目要求的版本
+          go-version: '1.24'
 
-      - name: Set up Rust
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Patch ferret build.rs to remove emp-tool/emp-ot links
+      - name: Configure Rust Crates for Static Library Generation
+        run: |
+          echo "=== Configuring crates to generate static libraries ==="
+          
+          for crate in bls48581 bulletproofs channel vdf verenc rpm; do
+            TOML="crates/${crate}/Cargo.toml"
+            
+            if [ -f "$TOML" ]; then
+              echo "Processing $crate..."
+              
+              # 备份
+              cp "$TOML" "${TOML}.backup"
+              
+              # 检查是否已有 [lib] section
+              if grep -q "^\[lib\]" "$TOML"; then
+                echo "  [lib] section exists, modifying..."
+                # 在 [lib] 后添加 crate-type (如果不存在)
+                if ! grep -q "^crate-type" "$TOML"; then
+                  sed -i '/^\[lib\]/a crate-type = ["lib", "staticlib"]' "$TOML"
+                fi
+              else
+                echo "  Adding [lib] section..."
+                cat >> "$TOML" << EOF
+
+[lib]
+crate-type = ["lib", "staticlib"]
+EOF
+              fi
+              
+              echo "  Modified $crate:"
+              tail -n 3 "$TOML"
+            else
+              echo "WARNING: $TOML not found!"
+            fi
+          done
+
+      - name: Patch Ferret build.rs
         run: |
           cd crates/ferret
           
-          echo "=== Original build.rs ==="
-          cat build.rs
-          echo "=== END Original ==="
+          # 注释掉 emp-tool 和 emp-ot 链接指令（它们是 header-only）
+          sed -i 's/println!("cargo:rustc-link-lib=static=emp-tool");/\/\/ &/' build.rs
+          sed -i 's/println!("cargo:rustc-link-lib=static=emp-ot");/\/\/ &/' build.rs
+          sed -i 's/println!("cargo:rustc-link-lib=emp-tool");/\/\/ &/' build.rs
+          sed -i 's/println!("cargo:rustc-link-lib=emp-ot");/\/\/ &/' build.rs
           
-          # 直接删除或注释掉要求链接 emp-tool 和 emp-ot 的行
-          # 这些库不存在，因为它们是 header-only
-          sed -i 's/println!("cargo:rustc-link-lib=static=emp-tool");/\/\/ println!("cargo:rustc-link-lib=static=emp-tool"); \/\/ Commented: header-only/' build.rs
-          sed -i 's/println!("cargo:rustc-link-lib=static=emp-ot");/\/\/ println!("cargo:rustc-link-lib=static=emp-ot"); \/\/ Commented: header-only/' build.rs
-          sed -i 's/println!("cargo:rustc-link-lib=emp-tool");/\/\/ println!("cargo:rustc-link-lib=emp-tool"); \/\/ Commented: header-only/' build.rs
-          sed -i 's/println!("cargo:rustc-link-lib=emp-ot");/\/\/ println!("cargo:rustc-link-lib=emp-ot"); \/\/ Commented: header-only/' build.rs
-          
-          # 如果 build.rs 没有搜索路径，添加它们
-          # 在 fn main() 后面添加
+          # 添加搜索路径
           if ! grep -q "cargo:rustc-link-search=native=/usr/local/lib" build.rs; then
-            echo "Adding link search paths..."
-            # 在第一个 println! 之前插入搜索路径
             sed -i '0,/println!/{s/println!/println!("cargo:rustc-link-search=native=\/usr\/local\/lib");\n    println!("cargo:rustc-link-search=native=\/usr\/lib");\n    &/}' build.rs
           fi
           
-          echo "=== Patched build.rs ==="
-          cat build.rs
-          echo "=== END Patched ==="
+          echo "=== Ferret build.rs patched ==="
 
-      - name: Build Ferret Library
+      - name: Build All Rust Crates
         run: |
-          cd crates/ferret
-          export LIBRARY_PATH="/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH"
-          export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
+          export LIBRARY_PATH="/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu"
+          export LD_LIBRARY_PATH="/usr/local/lib"
           export CPATH="/usr/local/include"
           export C_INCLUDE_PATH="/usr/local/include"
           export CPLUS_INCLUDE_PATH="/usr/local/include"
-          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
-          
-          echo "=== Current directory ==="
-          pwd
-          echo "=== Directory structure before build ==="
-          ls -la
           
           cargo clean
-          cargo build --release --verbose
+          cargo build --release --workspace --verbose
           
-          echo "=== Directory structure after build ==="
-          ls -la
-          echo "=== Searching for target directory ==="
-          find . -name target -type d
-          echo "=== Searching for .a files in entire workspace ==="
-          find ../.. -name "*.a" -type f 2>/dev/null | grep -i ferret
+          echo "=== All .a files generated ==="
+          find target/release -name "*.a" -type f
           
-          # 从根目录查找 libferret.a
-          cd ../..
-          FERRET_LIB=$(find . -name "libferret.a" -o -name "*ferret*.a" | head -1)
+          echo "=== Copying libraries to node/lib/linux-amd64/ ==="
+          mkdir -p node/lib/linux-amd64/
           
-          if [ -n "$FERRET_LIB" ]; then
-            echo "=== Found ferret library at: $FERRET_LIB ==="
-            mkdir -p node/lib/linux-amd64/
-            cp "$FERRET_LIB" node/lib/linux-amd64/libferret.a
-            echo "=== Generated library ==="
-            ls -lh node/lib/linux-amd64/libferret.a
-          else
-            echo "ERROR: Could not find ferret library anywhere"
-            echo "=== All .a files in workspace ==="
-            find . -name "*.a" -type f 2>/dev/null
-            exit 1
-          fi
+          for crate in ferret bls48581 bulletproofs channel vdf verenc rpm; do
+            # 查找库文件（可能带哈希）
+            LIB_FILES=$(find target/release -name "lib${crate}*.a" -type f 2>/dev/null)
+            
+            if [ -n "$LIB_FILES" ]; then
+              # 选择最大的文件（通常是完整版本）
+              LIB_FILE=$(echo "$LIB_FILES" | xargs ls -S 2>/dev/null | head -1)
+              echo "Found $crate: $LIB_FILE"
+              cp "$LIB_FILE" "node/lib/linux-amd64/lib${crate}.a"
+            else
+              echo "WARNING: No library found for $crate"
+            fi
+          done
+          
+          echo "=== Final libraries ==="
+          ls -lh node/lib/linux-amd64/
 
       - name: Build Go Node
         run: |
           cd node
           export CGO_ENABLED=1
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lbls48581 -lbulletproofs -lchannel -lvdf -lverenc -lrpm -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
           export CGO_CFLAGS="-I/usr/local/include"
-          # 移除 GOTOOLCHAIN=local，允许使用更新的 Go 版本
           
           go mod download
           go build -v -o qnode-linux-amd64 main.go
-          echo "=== Generated binary ==="
+          
+          echo "=== Binary generated ==="
           ls -lh qnode-linux-amd64
+          file qnode-linux-amd64
 
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: qnode-v2.1.0.18-standalone
+          name: qnode-v2.1.0.18-linux-amd64
           path: node/qnode-linux-amd64
