@@ -1,4 +1,4 @@
-name: Quilibrium Build - Simple Fix
+name: Quilibrium Build - Direct build.rs Override
 
 on:
   workflow_dispatch:
@@ -37,7 +37,8 @@ jobs:
           
           # 验证库文件存在
           echo "=== Checking installed libraries ==="
-          ls -la /usr/local/lib/libemp*.a || echo "EMP libraries not found!"
+          ls -la /usr/local/lib/libemp*.a
+          ls -la /usr/local/include/emp-tool/ | head -10
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -47,45 +48,69 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 修复 ferret build.rs - 添加库搜索路径
-      - name: Patch ferret build.rs to add library search path
+      # 3. 完全重写 ferret 的 build.rs 文件
+      - name: Override ferret build.rs with library paths
         run: |
           cd crates/ferret
           
-          # 在 build.rs 文件的 main() 函数开始处添加搜索路径指令
-          # 使用 Perl 在 'fn main()' 之后插入代码
-          perl -i -pe 'if (/fn main\(\)/) { 
-            $_ .= qq{    // Added by build patch: specify library search paths\n};
-            $_ .= qq{    println!("cargo:rustc-link-search=native=/usr/local/lib");\n};
-            $_ .= qq{    println!("cargo:rustc-link-lib=static=emp-tool");\n};
-            $_ .= qq{    println!("cargo:rustc-link-lib=static=emp-ot");\n};
-            $_ .= qq{\n};
-          }' build.rs
+          # 备份原始 build.rs
+          cp build.rs build.rs.original
           
-          # 显示修改内容
-          echo "=== Patched build.rs (first 30 lines) ==="
-          head -n 30 build.rs
+          # 创建新的 build.rs，添加所有必要的库搜索路径
+          cat > build.rs << 'EOFBUILD'
+          fn main() {
+              // 添加库搜索路径 - 告诉 rustc 在这些位置查找库
+              println!("cargo:rustc-link-search=native=/usr/local/lib");
+              println!("cargo:rustc-link-search=native=/usr/lib");
+              println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
+              
+              // 显式链接所需的静态库
+              println!("cargo:rustc-link-lib=static=emp-tool");
+              println!("cargo:rustc-link-lib=static=emp-ot");
+              
+              // 链接系统依赖库
+              println!("cargo:rustc-link-lib=ssl");
+              println!("cargo:rustc-link-lib=crypto");
+              println!("cargo:rustc-link-lib=stdc++");
+              println!("cargo:rustc-link-lib=pthread");
+              println!("cargo:rustc-link-lib=m");
+              println!("cargo:rustc-link-lib=dl");
+              
+              // 重新运行条件
+              println!("cargo:rerun-if-changed=build.rs");
+          }
+          EOFBUILD
+          
+          # 显示新的 build.rs 内容
+          echo "=== New build.rs content ==="
+          cat build.rs
 
       # 4. 编译 Rust 静态库
       - name: Build Ferret Library
         run: |
           cd crates/ferret
           
-          # 设置额外的环境变量帮助查找库
-          export RUSTFLAGS="-L native=/usr/local/lib"
-          export LIBRARY_PATH="/usr/local/lib:$LIBRARY_PATH"
+          # 设置环境变量
+          export RUSTFLAGS="-L native=/usr/local/lib -C link-args=-Wl,-rpath,/usr/local/lib"
+          export LIBRARY_PATH="/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH"
           export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
           export CPATH="/usr/local/include"
           export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           
-          # 使用 verbose 模式查看详细编译信息
+          # 清理之前的编译产物
+          cargo clean
+          
+          # 使用 verbose 模式编译
           cargo build --release --verbose
           
+          # 复制生成的库
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
           
           # 验证生成的库
+          echo "=== Generated library ==="
           ls -lh ../../node/lib/linux-amd64/libferret.a
+          file ../../node/lib/linux-amd64/libferret.a
 
       # 5. 最终编译 Go 节点
       - name: Build Go Node
@@ -93,12 +118,14 @@ jobs:
           cd node
           export CGO_ENABLED=1
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
+          export CGO_CFLAGS="-I/usr/local/include"
           export GOTOOLCHAIN=local
           
           go mod download
           go build -v -o qnode-linux-amd64 main.go
           
           # 验证生成的可执行文件
+          echo "=== Generated binary ==="
           ls -lh qnode-linux-amd64
           file qnode-linux-amd64
 
