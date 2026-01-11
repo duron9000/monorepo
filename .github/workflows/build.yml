@@ -1,4 +1,4 @@
-name: Full Build Quilibrium (EMP-Toolkit + Rust + Go)
+name: Full Build Quilibrium (Final Robust Version)
 
 on:
   workflow_dispatch:
@@ -13,20 +13,22 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
-      # 1. 安装系统底层依赖
+      # 1. 安装系统依赖
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git
+          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 2. 核心步骤：安装 EMP-Toolkit (这是解决 fatal error 的关键)
+      # 2. 安装 EMP-Toolkit (增加清理逻辑避免 128 错误)
       - name: Install EMP-Toolkit
         run: |
-          # 安装 emp-tool
+          # 清理并安装 emp-tool
+          rm -rf emp-tool
           git clone https://github.com/emp-toolkit/emp-tool.git
           cd emp-tool && cmake . && make -j$(nproc) && sudo make install && cd ..
           
-          # 安装 emp-ot
+          # 清理并安装 emp-ot
+          rm -rf emp-ot
           git clone https://github.com/emp-toolkit/emp-ot.git
           cd emp-ot && cmake . && make -j$(nproc) && sudo make install && cd ..
 
@@ -42,11 +44,11 @@ jobs:
       - name: Build Ferret Library
         run: |
           cd crates/ferret
-          # 明确指定 C++ 包含路径
           export CPATH="/usr/local/include"
           export LIBRARY_PATH="/usr/local/lib"
           cargo build --release
           
+          # 创建 node 需要的库目录
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
 
@@ -55,7 +57,7 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          # 链接所有必需的库：ferret, ssl, crypto 和基础库
+          # 注意：增加 -lrelic (如果 emp 依赖它) 和 -lstdc++
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
@@ -65,5 +67,5 @@ jobs:
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: quilibrium-v2.1.0.18-complete
+          name: quilibrium-v2.1.0.18-standalone
           path: node/qnode-linux-amd64
