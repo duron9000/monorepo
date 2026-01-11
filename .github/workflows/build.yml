@@ -85,58 +85,55 @@ jobs:
           cat build.rs
           echo "=== END Patched ==="
 
-      - name: Build All Rust Crypto Libraries
+      - name: Build Ferret Library
         run: |
-          # 定义需要编译的所有 Rust 模块
-          CRATES=("bls48581" "bulletproofs" "channel" "ferret" "rpm" "vdf" "verenc")
-          
-          mkdir -p node/lib/linux-amd64/
-          
+          cd crates/ferret
           export LIBRARY_PATH="/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH"
+          export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
           export CPATH="/usr/local/include"
+          export C_INCLUDE_PATH="/usr/local/include"
+          export CPLUS_INCLUDE_PATH="/usr/local/include"
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           
-          for CRATE in "${CRATES[@]}"; do
-            echo "=== Building $CRATE ==="
-            cd "crates/$CRATE"
-            
-            # 清理并针对发布版本编译
-            cargo clean
-            cargo build --release --verbose
-            
-            # 搜索生成的静态库文件
-            LIB_PATH=$(find target/release -maxdepth 1 -name "lib${CRATE}.a" | head -1)
-            
-            if [ -n "$LIB_PATH" ]; then
-              cp "$LIB_PATH" "../../node/lib/linux-amd64/"
-              echo "Successfully copied lib${CRATE}.a"
-            else
-              echo "ERROR: lib${CRATE}.a not found in target/release"
-              exit 1
-            fi
-            cd ../..
-          done
+          echo "=== Current directory ==="
+          pwd
+          echo "=== Directory structure before build ==="
+          ls -la
           
-          echo "=== All libraries prepared ==="
-          ls -lh node/lib/linux-amd64/
+          cargo clean
+          cargo build --release --verbose
+          
+          echo "=== Directory structure after build ==="
+          ls -la
+          echo "=== Searching for target directory ==="
+          find . -name target -type d
+          echo "=== Searching for .a files in entire workspace ==="
+          find ../.. -name "*.a" -type f 2>/dev/null | grep -i ferret
+          
+          # 从根目录查找 libferret.a
+          cd ../..
+          FERRET_LIB=$(find . -name "libferret.a" -o -name "*ferret*.a" | head -1)
+          
+          if [ -n "$FERRET_LIB" ]; then
+            echo "=== Found ferret library at: $FERRET_LIB ==="
+            mkdir -p node/lib/linux-amd64/
+            cp "$FERRET_LIB" node/lib/linux-amd64/libferret.a
+            echo "=== Generated library ==="
+            ls -lh node/lib/linux-amd64/libferret.a
+          else
+            echo "ERROR: Could not find ferret library anywhere"
+            echo "=== All .a files in workspace ==="
+            find . -name "*.a" -type f 2>/dev/null
+            exit 1
+          fi
 
       - name: Build Go Node
         run: |
           cd node
           export CGO_ENABLED=1
-          
-          # 核心修复：在 LDFLAGS 中链接所有缺失的库 
-          # 注意：顺序可能影响链接，通常 libferret 放在后面
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 \
-            -lbls48581 -lbulletproofs -lchannel -lrpm -lvdf -lverenc -lferret \
-            -L/usr/local/lib -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
-          
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
           export CGO_CFLAGS="-I/usr/local/include"
-          
-          go mod download
-          go build -v -o qnode-linux-amd64 main.go
-          
-          echo "=== Generated binary ==="
-          ls -lh qnode-linux-amd64
+          # 移除 GOTOOLCHAIN=local，允许使用更新的 Go 版本
           
           go mod download
           go build -v -o qnode-linux-amd64 main.go
