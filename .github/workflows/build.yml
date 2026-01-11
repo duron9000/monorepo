@@ -16,16 +16,61 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libgmp-dev python3 python3-pip wget curl
+          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libgmp-dev
+
+      - name: Install Relic Toolkit manually
+        run: |
+          git clone https://github.com/relic-toolkit/relic.git
+          cd relic
+          mkdir -p build && cd build
+          cmake -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMULTI=PTHREAD \
+            -DCOMP="-O3 -funroll-loops -fomit-frame-pointer -march=native -mtune=native" \
+            -DARCH="X64" \
+            -DRAND="UDEV" \
+            -DWITH="BN;DV;FP;FPX;EP;EPX;PP;PC;MD" \
+            -DCHECK=off \
+            -DVERBS=off \
+            -DDEBUG=off \
+            -DBENCH=0 \
+            -DTESTS=0 \
+            -DARITH=gmp \
+            -DFP_PRIME=254 \
+            -DFP_QNRES=on \
+            -DFP_METHD="INTEG;INTEG;INTEG;MONTY;LOWER;SLIDE" \
+            -DFPX_METHD="INTEG;INTEG;LAZYR" \
+            -DPP_METHD="LAZYR;OATEP" \
+            -DBN_PRECI=256 \
+            ..
+          make -j$(nproc)
+          sudo make install
+          cd ../..
+          sudo ldconfig
 
       - name: Install EMP Toolkit
         run: |
-          wget https://raw.githubusercontent.com/emp-toolkit/emp-readme/master/scripts/install.py
-          python3 install.py --deps --tool --ot
+          # 安装 emp-tool
+          git clone https://github.com/emp-toolkit/emp-tool.git
+          cd emp-tool
+          cmake . -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+          sudo make install
+          cd ..
+          
+          # 安装 emp-ot
+          git clone https://github.com/emp-toolkit/emp-ot.git
+          cd emp-ot
+          cmake . -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+          sudo make install
+          cd ..
+          
           sudo ldconfig
-          echo "=== Verifying EMP installation ==="
-          ls -la /usr/local/lib/libemp*.a
+          
+          echo "=== Verifying all libraries ==="
           ls -la /usr/local/lib/librelic*.a
+          ls -la /usr/local/lib/libemp*.a
 
       - name: Set up Go
         uses: actions/setup-go@v5
