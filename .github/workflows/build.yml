@@ -1,4 +1,4 @@
-name: Full Build Quilibrium (Final Robust Version)
+name: Full Build Quilibrium (Final Linker Fix)
 
 on:
   workflow_dispatch:
@@ -19,15 +19,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 2. 安装 EMP-Toolkit (增加清理逻辑避免 128 错误)
+      # 2. 安装 EMP-Toolkit (核心：确保生成 .a 静态库)
       - name: Install EMP-Toolkit
         run: |
-          # 清理并安装 emp-tool
+          # 安装 emp-tool
           rm -rf emp-tool
           git clone https://github.com/emp-toolkit/emp-tool.git
           cd emp-tool && cmake . && make -j$(nproc) && sudo make install && cd ..
           
-          # 清理并安装 emp-ot
+          # 安装 emp-ot
           rm -rf emp-ot
           git clone https://github.com/emp-toolkit/emp-ot.git
           cd emp-ot && cmake . && make -j$(nproc) && sudo make install && cd ..
@@ -40,15 +40,17 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 编译 Rust 静态库
+      # 3. 编译 Rust 静态库 (核心修复：增加库搜索路径)
       - name: Build Ferret Library
         run: |
           cd crates/ferret
+          # 关键：告诉 Rust 编译器去 /usr/local/lib 找 emp-tool 和 emp-ot
+          export LIBRARY_PATH="/usr/local/lib:$LIBRARY_PATH"
+          export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
           export CPATH="/usr/local/include"
-          export LIBRARY_PATH="/usr/local/lib"
+          
           cargo build --release
           
-          # 创建 node 需要的库目录
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
 
@@ -57,8 +59,8 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          # 注意：增加 -lrelic (如果 emp 依赖它) 和 -lstdc++
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
+          # 增加 -lemp-tool 链接，确保 Go 能找到底层 C++ 实现
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
           go mod download
@@ -67,5 +69,5 @@ jobs:
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: quilibrium-v2.1.0.18-standalone
+          name: quilibrium-v2.1.0.18-final
           path: node/qnode-linux-amd64
