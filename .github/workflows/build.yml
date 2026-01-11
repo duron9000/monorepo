@@ -40,27 +40,24 @@ jobs:
           # 清理可能存在的旧目录
           rm -rf emp-tool emp-ot
           
-          # 安装 emp-tool
+          # 安装 emp-tool (header-only)
           git clone https://github.com/emp-toolkit/emp-tool.git
           cd emp-tool
           cmake . -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
-          sudo make install
+          sudo make install  # This only installs headers
           cd ..
           
-          # 安装 emp-ot
+          # 安装 emp-ot (header-only)
           git clone https://github.com/emp-toolkit/emp-ot.git
           cd emp-ot
           cmake . -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
-          sudo make install
+          sudo make install  # This only installs headers
           cd ..
           
-          sudo ldconfig
-          
-          echo "=== Verifying all libraries ==="
+          echo "=== Verifying EMP headers and relic library ==="
+          ls -la /usr/local/include/emp-tool/ | head -10
+          ls -la /usr/local/include/emp-ot/ | head -10
           ls -la /usr/local/lib/librelic*.a
-          ls -la /usr/local/lib/libemp*.a
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -78,12 +75,16 @@ jobs:
           
           cat > build_prepend.txt << 'EOF'
               // === PATCHED: Add library search paths ===
+              // Note: emp-tool and emp-ot are header-only libraries
+              // We only need to link the underlying dependencies
               println!("cargo:rustc-link-search=native=/usr/local/lib");
               println!("cargo:rustc-link-search=native=/usr/lib");
               println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
-              println!("cargo:rustc-link-lib=static=emp-tool");
-              println!("cargo:rustc-link-lib=static=emp-ot");
+              
+              // Link relic (required by EMP toolkit)
               println!("cargo:rustc-link-lib=static=relic_s");
+              
+              // Link system libraries
               println!("cargo:rustc-link-lib=ssl");
               println!("cargo:rustc-link-lib=crypto");
               println!("cargo:rustc-link-lib=gmp");
@@ -122,7 +123,8 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
+          # Note: emp-tool and emp-ot are header-only, only link relic and system libs
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
           export CGO_CFLAGS="-I/usr/local/include"
           export GOTOOLCHAIN=local
           go mod download
