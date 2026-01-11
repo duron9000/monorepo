@@ -1,4 +1,4 @@
-name: Quilibrium Build - Direct build.rs Override
+name: Quilibrium Build - Use Official EMP Install Script
 
 on:
   workflow_dispatch:
@@ -17,28 +17,29 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
+          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git \
+            libgmp-dev python3 python3-pip wget curl
 
-      # 2. 顺序安装 EMP-Toolkit (物理路径安装)
-      - name: Install EMP Toolkit
+      # 2. 使用官方 Python 脚本安装 EMP Toolkit（正确方式）
+      - name: Install EMP Toolkit using official script
         run: |
-          # 安装 emp-tool
-          rm -rf emp-tool-repo
-          git clone https://github.com/emp-toolkit/emp-tool.git emp-tool-repo
-          cd emp-tool-repo && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
+          # 下载官方安装脚本
+          wget https://raw.githubusercontent.com/emp-toolkit/emp-readme/master/scripts/install.py
           
-          # 安装 emp-ot
-          rm -rf emp-ot-repo
-          git clone https://github.com/emp-toolkit/emp-ot.git emp-ot-repo
-          cd emp-ot-repo && cmake . -DBUILD_SHARED_LIBS=OFF -DCMAKE_PREFIX_PATH=/usr/local && make -j$(nproc) && sudo make install && cd ..
+          # 使用官方脚本安装 deps, emp-tool 和 emp-ot
+          # --deps 会安装 relic-toolkit 等依赖
+          # --tool 安装 emp-tool
+          # --ot 安装 emp-ot
+          python3 install.py --deps --tool --ot
           
           # 刷新库索引
           sudo ldconfig
           
-          # 验证库文件存在
-          echo "=== Checking installed libraries ==="
-          ls -la /usr/local/lib/libemp*.a
-          ls -la /usr/local/include/emp-tool/ | head -10
+          # 验证安装
+          echo "=== Checking EMP installation ==="
+          ls -la /usr/local/lib/libemp*.a || echo "Warning: Static libraries not found in /usr/local/lib"
+          ls -la /usr/local/include/emp-tool/ | head -10 || echo "Warning: emp-tool headers not found"
+          ls -la /usr/local/include/emp-ot/ | head -10 || echo "Warning: emp-ot headers not found"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -67,10 +68,12 @@ jobs:
               // 显式链接所需的静态库
               println!("cargo:rustc-link-lib=static=emp-tool");
               println!("cargo:rustc-link-lib=static=emp-ot");
+              println!("cargo:rustc-link-lib=static=relic_s");
               
               // 链接系统依赖库
               println!("cargo:rustc-link-lib=ssl");
               println!("cargo:rustc-link-lib=crypto");
+              println!("cargo:rustc-link-lib=gmp");
               println!("cargo:rustc-link-lib=stdc++");
               println!("cargo:rustc-link-lib=pthread");
               println!("cargo:rustc-link-lib=m");
@@ -95,6 +98,8 @@ jobs:
           export LIBRARY_PATH="/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH"
           export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
           export CPATH="/usr/local/include"
+          export C_INCLUDE_PATH="/usr/local/include"
+          export CPLUS_INCLUDE_PATH="/usr/local/include"
           export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           
           # 清理之前的编译产物
@@ -117,7 +122,7 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
           export CGO_CFLAGS="-I/usr/local/include"
           export GOTOOLCHAIN=local
           
