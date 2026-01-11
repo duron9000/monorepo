@@ -1,4 +1,4 @@
-name: Quilibrium Build - Patch build.rs with Link Paths
+name: Quilibrium Build Fixed
 
 on:
   workflow_dispatch:
@@ -13,20 +13,16 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
-      # 1. 安装系统底层依赖
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git \
-            libgmp-dev python3 python3-pip wget curl
+          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libgmp-dev python3 python3-pip wget curl
 
-      # 2. 使用官方 Python 脚本安装 EMP Toolkit
-      - name: Install EMP Toolkit using official script
+      - name: Install EMP Toolkit
         run: |
           wget https://raw.githubusercontent.com/emp-toolkit/emp-readme/master/scripts/install.py
           python3 install.py --deps --tool --ot
           sudo ldconfig
-          
           echo "=== Verifying EMP installation ==="
           ls -la /usr/local/lib/libemp*.a
           ls -la /usr/local/lib/librelic*.a
@@ -39,46 +35,40 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 智能修补 build.rs - 在 main() 函数开头插入链接器指令
-      - name: Patch ferret build.rs to add linker search paths
+      - name: Patch ferret build.rs
         run: |
           cd crates/ferret
-          
-          # 显示原始 build.rs
           echo "=== Original build.rs (first 40 lines) ==="
           head -n 40 build.rs
           
-          # 使用 sed 在 fn main() 的下一行（函数体开始处）插入链接器指令
-          # 1. 找到 "fn main() {" 这一行
-          # 2. 在下一行插入我们的 println! 语句
-          sed -i '/^fn main() {$/a\
-    // === PATCHED: Add library search paths for EMP toolkit ===\
-    println!("cargo:rustc-link-search=native=/usr/local/lib");\
-    println!("cargo:rustc-link-search=native=/usr/lib");\
-    println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");\
-    println!("cargo:rustc-link-lib=static=emp-tool");\
-    println!("cargo:rustc-link-lib=static=emp-ot");\
-    println!("cargo:rustc-link-lib=static=relic_s");\
-    println!("cargo:rustc-link-lib=ssl");\
-    println!("cargo:rustc-link-lib=crypto");\
-    println!("cargo:rustc-link-lib=gmp");\
-    println!("cargo:rustc-link-lib=stdc++");\
-    println!("cargo:rustc-link-lib=pthread");\
-    println!("cargo:rustc-link-lib=m");\
-    println!("cargo:rustc-link-lib=dl");\
-    // === END PATCH ===\
-' build.rs
+          cat > build_prepend.txt << 'EOF'
+              // === PATCHED: Add library search paths ===
+              println!("cargo:rustc-link-search=native=/usr/local/lib");
+              println!("cargo:rustc-link-search=native=/usr/lib");
+              println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
+              println!("cargo:rustc-link-lib=static=emp-tool");
+              println!("cargo:rustc-link-lib=static=emp-ot");
+              println!("cargo:rustc-link-lib=static=relic_s");
+              println!("cargo:rustc-link-lib=ssl");
+              println!("cargo:rustc-link-lib=crypto");
+              println!("cargo:rustc-link-lib=gmp");
+              println!("cargo:rustc-link-lib=stdc++");
+              println!("cargo:rustc-link-lib=pthread");
+              println!("cargo:rustc-link-lib=m");
+              println!("cargo:rustc-link-lib=dl");
+              // === END PATCH ===
           
-          # 显示修补后的 build.rs
+          EOF
+          
+          awk '/^fn main\(\) \{$/ {print; system("cat build_prepend.txt"); next} 1' build.rs > build.rs.new
+          mv build.rs.new build.rs
+          
           echo "=== Patched build.rs (first 60 lines) ==="
           head -n 60 build.rs
 
-      # 4. 编译 Rust 静态库
       - name: Build Ferret Library
         run: |
           cd crates/ferret
-          
-          # 设置环境变量
           export RUSTFLAGS="-L native=/usr/local/lib"
           export LIBRARY_PATH="/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH"
           export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
@@ -86,20 +76,13 @@ jobs:
           export C_INCLUDE_PATH="/usr/local/include"
           export CPLUS_INCLUDE_PATH="/usr/local/include"
           export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
-          
-          # 清理并编译
           cargo clean
           cargo build --release --verbose
-          
-          # 复制生成的库
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
-          
           echo "=== Generated library ==="
           ls -lh ../../node/lib/linux-amd64/libferret.a
-          file ../../node/lib/linux-amd64/libferret.a
 
-      # 5. 最终编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
@@ -107,13 +90,10 @@ jobs:
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
           export CGO_CFLAGS="-I/usr/local/include"
           export GOTOOLCHAIN=local
-          
           go mod download
           go build -v -o qnode-linux-amd64 main.go
-          
           echo "=== Generated binary ==="
           ls -lh qnode-linux-amd64
-          file qnode-linux-amd64
 
       - name: Upload Binary
         uses: actions/upload-artifact@v4
