@@ -20,6 +20,9 @@ jobs:
 
       - name: Install Relic Toolkit with GMP preset
         run: |
+          # 清理可能存在的旧目录
+          rm -rf relic
+          
           git clone https://github.com/relic-toolkit/relic.git
           cd relic
           mkdir -p build && cd build
@@ -34,6 +37,9 @@ jobs:
 
       - name: Install EMP Toolkit
         run: |
+          # 清理可能存在的旧目录
+          rm -rf emp-tool emp-ot
+          
           # 安装 emp-tool
           git clone https://github.com/emp-toolkit/emp-tool.git
           cd emp-tool
