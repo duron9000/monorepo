@@ -43,12 +43,15 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 编译 Rust 静态库 (增加 RUSTFLAGS 解决链接错误)
+      # 3. 编译 Rust 静态库 (核心修复：增加 RUSTFLAGS)
       - name: Build Ferret Library
         run: |
           cd crates/ferret
           
-          # 关键点：使用 RUSTFLAGS 告诉 cargo 链接器在 /usr/local/lib 中寻找 native 库
+          # 关键点：
+          # RUSTFLAGS: 告诉 cargo 链接器去哪里找 native 库
+          # LIBRARY_PATH: 帮助编译器在链接阶段找到静态库
+          # CPATH: 确保 C++ 头文件路径正确
           export RUSTFLAGS="-L native=/usr/local/lib"
           export LIBRARY_PATH="/usr/local/lib:$LIBRARY_PATH"
           export CPATH="/usr/local/include"
@@ -63,7 +66,7 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          # Go 阶段同样需要指定路径
+          # Go 阶段同样需要指定 CGO 链接路径
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
