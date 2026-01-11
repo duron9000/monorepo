@@ -18,31 +18,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libgmp-dev
 
-      - name: Install Relic Toolkit manually
+      - name: Install Relic Toolkit with GMP preset
         run: |
           git clone https://github.com/relic-toolkit/relic.git
           cd relic
           mkdir -p build && cd build
-          cmake -G "Unix Makefiles" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DMULTI=PTHREAD \
-            -DCOMP="-O3 -funroll-loops -fomit-frame-pointer -march=native -mtune=native" \
-            -DARCH="X64" \
-            -DRAND="UDEV" \
-            -DWITH="BN;DV;FP;FPX;EP;EPX;PP;PC;MD" \
-            -DCHECK=off \
-            -DVERBS=off \
-            -DDEBUG=off \
-            -DBENCH=0 \
-            -DTESTS=0 \
-            -DARITH=gmp \
-            -DFP_PRIME=254 \
-            -DFP_QNRES=on \
-            -DFP_METHD="INTEG;INTEG;INTEG;MONTY;LOWER;SLIDE" \
-            -DFPX_METHD="INTEG;INTEG;LAZYR" \
-            -DPP_METHD="LAZYR;OATEP" \
-            -DBN_PRECI=256 \
-            ..
+          
+          # 使用 gmp-pbc-bn254 的配置（使用 GMP 算术后端，更通用）
+          ../preset/gmp-pbc-bn254.sh ..
+          
           make -j$(nproc)
           sudo make install
           cd ../..
