@@ -1,4 +1,4 @@
-name: Quilibrium Ultimate Build (Linker Force Fix)
+name: Quilibrium Ultimate Build (Linker & Path Fix)
 
 on:
   workflow_dispatch:
@@ -13,31 +13,24 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
-      # 1. 环境准备
+      # 1. 安装必要的系统级工具
       - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 2. 编译并物理定位 EMP 静态库
-      - name: Build and Locate EMP Libraries
+      # 2. 编译并物理安装 EMP 静态库 (增加清理逻辑)
+      - name: Build and Install EMP Toolkit
         run: |
           # 编译 emp-tool
-          git clone https://github.com/emp-toolkit/emp-tool.git
-          cd emp-tool && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
+          rm -rf emp-tool-src # 使用不冲突的临时目录名
+          git clone https://github.com/emp-toolkit/emp-tool.git emp-tool-src
+          cd emp-tool-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
           
           # 编译 emp-ot
-          git clone https://github.com/emp-toolkit/emp-ot.git
-          cd emp-ot && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
-
-          # 【关键点】强制将生成的 .a 文件拷贝到 ferret 源码目录
-          # 这样 Rust 编译时在当前目录及其搜索路径下绝对能找到它们
-          mkdir -p crates/ferret/lib
-          cp /usr/local/lib/libemp-tool.a crates/ferret/
-          cp /usr/local/lib/libemp-ot.a crates/ferret/
-          # 有些版本可能需要加 lib 前缀或去掉，我们多备一份
-          cp /usr/local/lib/libemp-tool.a crates/ferret/libemp-tool.a
-          cp /usr/local/lib/libemp-ot.a crates/ferret/libemp-ot.a
+          rm -rf emp-ot-src
+          git clone https://github.com/emp-toolkit/emp-ot.git emp-ot-src
+          cd emp-ot-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -47,24 +40,29 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 编译 Rust 静态库
+      # 3. 编译 Rust 静态库 (物理移动库文件以防 Rust 找不到)
       - name: Build Ferret Library
         run: |
           cd crates/ferret
-          # 告诉 Rust 在当前目录和系统目录找库
+          
+          # 强制将系统安装的库拷贝到当前目录，确保 Rust 的 build.rs 能看到
+          cp /usr/local/lib/libemp-tool.a .
+          cp /usr/local/lib/libemp-ot.a .
+          
+          # 显式传递链接路径
           export RUSTFLAGS="-L native=$(pwd) -L native=/usr/local/lib"
-          export LIBRARY_PATH="$(pwd):/usr/local/lib"
           cargo build --release
           
+          # 为 Go 编译准备目录
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
 
-      # 4. 编译 Go 节点
+      # 4. 最终编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
           export CGO_ENABLED=1
-          # Go 链接阶段也需要这些 C++ 静态库
+          # 链接所有相关库：ferret, emp, ssl, stdc++
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
