@@ -95,34 +95,37 @@ jobs:
           export CPLUS_INCLUDE_PATH="/usr/local/include"
           export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           
+          echo "=== Current directory ==="
+          pwd
+          echo "=== Directory structure before build ==="
+          ls -la
+          
           cargo clean
           cargo build --release --verbose
           
-          echo "=== Checking build output ==="
-          ls -la target/release/ | grep -E "\.a$|ferret"
-          find target/release -name "*.a" -type f
+          echo "=== Directory structure after build ==="
+          ls -la
+          echo "=== Searching for target directory ==="
+          find . -name target -type d
+          echo "=== Searching for .a files in entire workspace ==="
+          find ../.. -name "*.a" -type f 2>/dev/null | grep -i ferret
           
-          mkdir -p ../../node/lib/linux-amd64/
+          # 从根目录查找 libferret.a
+          cd ../..
+          FERRET_LIB=$(find . -name "libferret.a" -o -name "*ferret*.a" | head -1)
           
-          # Rust 生成的静态库可能在 target/release/ 或 target/release/deps/
-          if [ -f target/release/libferret.a ]; then
-            cp target/release/libferret.a ../../node/lib/linux-amd64/
-          elif [ -f target/release/deps/libferret.a ]; then
-            cp target/release/deps/libferret.a ../../node/lib/linux-amd64/
+          if [ -n "$FERRET_LIB" ]; then
+            echo "=== Found ferret library at: $FERRET_LIB ==="
+            mkdir -p node/lib/linux-amd64/
+            cp "$FERRET_LIB" node/lib/linux-amd64/libferret.a
+            echo "=== Generated library ==="
+            ls -lh node/lib/linux-amd64/libferret.a
           else
-            # 查找任何包含 ferret 的 .a 文件
-            FERRET_LIB=$(find target/release -name "*ferret*.a" -type f | head -1)
-            if [ -n "$FERRET_LIB" ]; then
-              echo "Found: $FERRET_LIB"
-              cp "$FERRET_LIB" ../../node/lib/linux-amd64/libferret.a
-            else
-              echo "ERROR: Could not find ferret library"
-              exit 1
-            fi
+            echo "ERROR: Could not find ferret library anywhere"
+            echo "=== All .a files in workspace ==="
+            find . -name "*.a" -type f 2>/dev/null
+            exit 1
           fi
-          
-          echo "=== Generated library ==="
-          ls -lh ../../node/lib/linux-amd64/libferret.a
 
       - name: Build Go Node
         run: |
