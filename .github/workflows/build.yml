@@ -1,4 +1,4 @@
-name: Quilibrium Final Fix (Linker Search Path)
+name: Quilibrium Build - Simple Fix
 
 on:
   workflow_dispatch:
@@ -34,6 +34,10 @@ jobs:
           
           # 刷新库索引
           sudo ldconfig
+          
+          # 验证库文件存在
+          echo "=== Checking installed libraries ==="
+          ls -la /usr/local/lib/libemp*.a || echo "EMP libraries not found!"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -43,35 +47,60 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 编译 Rust 静态库 (核心修复：增加 RUSTFLAGS)
+      # 3. 修复 ferret build.rs - 添加库搜索路径
+      - name: Patch ferret build.rs to add library search path
+        run: |
+          cd crates/ferret
+          
+          # 在 build.rs 文件的 main() 函数开始处添加搜索路径指令
+          # 使用 Perl 在 'fn main()' 之后插入代码
+          perl -i -pe 'if (/fn main\(\)/) { 
+            $_ .= qq{    // Added by build patch: specify library search paths\n};
+            $_ .= qq{    println!("cargo:rustc-link-search=native=/usr/local/lib");\n};
+            $_ .= qq{    println!("cargo:rustc-link-lib=static=emp-tool");\n};
+            $_ .= qq{    println!("cargo:rustc-link-lib=static=emp-ot");\n};
+            $_ .= qq{\n};
+          }' build.rs
+          
+          # 显示修改内容
+          echo "=== Patched build.rs (first 30 lines) ==="
+          head -n 30 build.rs
+
+      # 4. 编译 Rust 静态库
       - name: Build Ferret Library
         run: |
           cd crates/ferret
           
-          # 关键点：
-          # RUSTFLAGS: 告诉 cargo 链接器去哪里找 native 库
-          # LIBRARY_PATH: 帮助编译器在链接阶段找到静态库
-          # CPATH: 确保 C++ 头文件路径正确
+          # 设置额外的环境变量帮助查找库
           export RUSTFLAGS="-L native=/usr/local/lib"
           export LIBRARY_PATH="/usr/local/lib:$LIBRARY_PATH"
+          export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
           export CPATH="/usr/local/include"
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           
-          cargo build --release
+          # 使用 verbose 模式查看详细编译信息
+          cargo build --release --verbose
           
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
+          
+          # 验证生成的库
+          ls -lh ../../node/lib/linux-amd64/libferret.a
 
-      # 4. 最终编译 Go 节点
+      # 5. 最终编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
           export CGO_ENABLED=1
-          # Go 阶段同样需要指定 CGO 链接路径
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
           go mod download
           go build -v -o qnode-linux-amd64 main.go
+          
+          # 验证生成的可执行文件
+          ls -lh qnode-linux-amd64
+          file qnode-linux-amd64
 
       - name: Upload Binary
         uses: actions/upload-artifact@v4
