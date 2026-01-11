@@ -1,4 +1,4 @@
-name: Quilibrium Ultimate Build (Absolute Path Fix)
+name: Quilibrium Ultimate Build (Linker Diagnostic Version)
 
 on:
   workflow_dispatch:
@@ -18,27 +18,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 1. 编译 EMP 并使用绝对路径精确提取
-      - name: Build EMP and Precise Extract
+      # 1. 强力编译 EMP 核心并进行全盘路径诊断
+      - name: Build EMP and Diagnostic Locate
         run: |
-          # 创建绝对路径的存放目录
           mkdir -p $HOME/compiled_libs
           
           # 编译 emp-tool
           git clone https://github.com/emp-toolkit/emp-tool.git emp-tool-src
-          cd emp-tool-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc)
-          # 搜寻生成的静态库并拷贝
-          find $(pwd) -name "libemp-tool.a" -exec cp {} $HOME/compiled_libs/ \;
+          cd emp-tool-src
+          cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_WERROR=OFF
+          make -j$(nproc)
+          # 搜索所有以 .a 结尾的文件，不管它叫什么
+          find . -name "*.a" -exec cp {} $HOME/compiled_libs/ \;
           cd ..
           
           # 编译 emp-ot
           git clone https://github.com/emp-toolkit/emp-ot.git emp-ot-src
-          cd emp-ot-src && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc)
-          find $(pwd) -name "libemp-ot.a" -exec cp {} $HOME/compiled_libs/ \;
+          cd emp-ot-src
+          cmake . -DBUILD_SHARED_LIBS=OFF
+          make -j$(nproc)
+          find . -name "*.a" -exec cp {} $HOME/compiled_libs/ \;
           cd ..
 
-          # 验证并导出
-          ls -R $HOME/compiled_libs/
+          # 打印出到底找到了哪些库文件
+          echo "==== Current Compiled Libraries ===="
+          ls -F $HOME/compiled_libs/
+          echo "===================================="
           echo "LIBS_DIR=$HOME/compiled_libs" >> $GITHUB_ENV
 
       - name: Set up Go
@@ -49,35 +54,32 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 2. 编译 Rust 静态库
+      # 2. 编译 Rust 静态库 (带容错逻辑)
       - name: Build Ferret Library
         run: |
           cd crates/ferret
           
-          # 从环境变量中拷贝库文件
-          cp ${{ env.LIBS_DIR }}/libemp-tool.a .
-          cp ${{ env.LIBS_DIR }}/libemp-ot.a .
+          # 尝试拷贝库，如果不存在则打印目录内容协助调试
+          cp ${{ env.LIBS_DIR }}/*.a . || (ls -R ${{ env.LIBS_DIR }} && exit 1)
           
           export RUSTFLAGS="-L native=$(pwd)"
           export LIBRARY_PATH="$(pwd)"
-          export CPATH="/usr/local/include"
           
           cargo build --release
           
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
 
-      # 3. 编译 Go 节点
+      # 3. 最终编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
-          # 拷贝所有底层库到 node 链接目录
           mkdir -p ./lib/linux-amd64/
-          cp ${{ env.LIBS_DIR }}/libemp-tool.a ./lib/linux-amd64/
-          cp ${{ env.LIBS_DIR }}/libemp-ot.a ./lib/linux-amd64/
+          cp ${{ env.LIBS_DIR }}/*.a ./lib/linux-amd64/
           
           export CGO_ENABLED=1
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
+          # 使用通配符链接，减少对具体文件名的依赖
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
           go mod download
