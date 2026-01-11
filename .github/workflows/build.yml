@@ -53,7 +53,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'  # 更新到项目要求的版本
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -133,7 +133,8 @@ jobs:
           export CGO_ENABLED=1
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
           export CGO_CFLAGS="-I/usr/local/include"
-          export GOTOOLCHAIN=local
+          # 移除 GOTOOLCHAIN=local，允许使用更新的 Go 版本
+          
           go mod download
           go build -v -o qnode-linux-amd64 main.go
           echo "=== Generated binary ==="
