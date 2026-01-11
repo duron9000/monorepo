@@ -1,4 +1,4 @@
-name: Precise Build Quilibrium (Full Dependency Fix)
+name: Full Build Quilibrium (EMP-Toolkit + Rust + Go)
 
 on:
   workflow_dispatch:
@@ -13,11 +13,22 @@ jobs:
           repository: 'QuilibriumNetwork/monorepo'
           ref: 'v2.1.0.18'
 
-      # 1. 安装缺少的 C++ 编译环境和加密依赖库
+      # 1. 安装系统底层依赖
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake libssl-dev pkg-config
+          sudo apt-get install -y build-essential cmake libssl-dev pkg-config git
+
+      # 2. 核心步骤：安装 EMP-Toolkit (这是解决 fatal error 的关键)
+      - name: Install EMP-Toolkit
+        run: |
+          # 安装 emp-tool
+          git clone https://github.com/emp-toolkit/emp-tool.git
+          cd emp-tool && cmake . && make -j$(nproc) && sudo make install && cd ..
+          
+          # 安装 emp-ot
+          git clone https://github.com/emp-toolkit/emp-ot.git
+          cd emp-ot && cmake . && make -j$(nproc) && sudo make install && cd ..
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -26,29 +37,26 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
 
-      # 2. 编译 Ferret 库
+      # 3. 编译 Rust 静态库
       - name: Build Ferret Library
         run: |
-          # 修复可能存在的 git 权限问题
-          git config --global --add safe.directory "*"
-          
           cd crates/ferret
-          # 这里会自动调用 gcc/g++ 编译 C++ 桥接代码
+          # 明确指定 C++ 包含路径
+          export CPATH="/usr/local/include"
+          export LIBRARY_PATH="/usr/local/lib"
           cargo build --release
           
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
-          echo "Successfully built libferret.a"
 
-      # 3. 编译 Go 节点
+      # 4. 编译 Go 节点
       - name: Build Go Node
         run: |
           cd node
           export CGO_ENABLED=1
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lssl -lcrypto -lm -ldl -lpthread"
+          # 链接所有必需的库：ferret, ssl, crypto 和基础库
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -lferret -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
           go mod download
@@ -57,5 +65,5 @@ jobs:
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: quilibrium-v2.1.0.18-final
+          name: quilibrium-v2.1.0.18-complete
           path: node/qnode-linux-amd64
