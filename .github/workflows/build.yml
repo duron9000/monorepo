@@ -19,18 +19,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libssl-dev pkg-config git libboost-all-dev
 
-      # 2. 安装 EMP-Toolkit (核心：确保生成 .a 静态库)
+      # 2. 安装 EMP-Toolkit (强制生成静态库并刷新 ldconfig)
       - name: Install EMP-Toolkit
         run: |
           # 安装 emp-tool
           rm -rf emp-tool
           git clone https://github.com/emp-toolkit/emp-tool.git
-          cd emp-tool && cmake . && make -j$(nproc) && sudo make install && cd ..
+          cd emp-tool && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
           
           # 安装 emp-ot
           rm -rf emp-ot
           git clone https://github.com/emp-toolkit/emp-ot.git
-          cd emp-ot && cmake . && make -j$(nproc) && sudo make install && cd ..
+          cd emp-ot && cmake . -DBUILD_SHARED_LIBS=OFF && make -j$(nproc) && sudo make install && cd ..
+          
+          # 刷新系统库缓存
+          sudo ldconfig
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -40,13 +43,12 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 3. 编译 Rust 静态库 (核心修复：增加库搜索路径)
+      # 3. 编译 Rust 静态库 (核心修复：增加 LIBRARY_PATH)
       - name: Build Ferret Library
         run: |
           cd crates/ferret
-          # 关键：告诉 Rust 编译器去 /usr/local/lib 找 emp-tool 和 emp-ot
+          # 告诉 Rust 在哪里寻找 emp-tool.a 和 emp-ot.a
           export LIBRARY_PATH="/usr/local/lib:$LIBRARY_PATH"
-          export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
           export CPATH="/usr/local/include"
           
           cargo build --release
@@ -59,8 +61,8 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          # 增加 -lemp-tool 链接，确保 Go 能找到底层 C++ 实现
-          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
+          # 链接所有相关路径
+          export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lemp-tool -lemp-ot -lssl -lcrypto -lm -ldl -lpthread -lstdc++"
           export GOTOOLCHAIN=local
           
           go mod download
