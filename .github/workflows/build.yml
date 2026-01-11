@@ -1,29 +1,38 @@
-name: Build Quilibrium Node
+name: Remote Build Quilibrium Node
 
 on:
-  workflow_dispatch: # 允许你手动点击按钮开始编译
+  workflow_dispatch: # 允许你手动点击按钮触发编译
 
 jobs:
-  build:
+  build-node:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      # 1. 直接从原始仓库克隆指定的版本标签
+      - name: Checkout Original Repository
         uses: actions/checkout@v4
         with:
-          ref: 'v2.1.0.18' # 锁定到你指定的版本
+          repository: 'QuilibriumNetwork/monorepo'
+          ref: 'v2.1.0.18'
+          fetch-depth: 0
 
+      # 2. 安装官方推荐的 Go 环境
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.22' # 官方推荐的 Go 版本
+          go-version: '1.22'
+          check-latest: true
 
-      - name: Build Node
+      # 3. 编译节点程序
+      - name: Build Quilibrium Node
         run: |
           cd node
-          go build -v -o node-linux-amd64 main.go
+          # 使用 -ldflags 可以减小体积并注入版本信息（可选）
+          go build -v -o qnode-linux-amd64 main.go
 
-      - name: Upload Artifact
+      # 4. 将编译好的二进制文件上传到 GitHub Actions 页面
+      - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: quilibrium-node-binary
-          path: node/node-linux-amd64
+          name: quilibrium-v2.1.0.18-linux
+          path: node/qnode-linux-amd64
+          retention-days: 5 # 编译出的文件保存5天
