@@ -1,0 +1,29 @@
+name: Build Quilibrium Node
+
+on:
+  workflow_dispatch: # 允许你手动点击按钮开始编译
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: 'v2.1.0.18' # 锁定到你指定的版本
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22' # 官方推荐的 Go 版本
+
+      - name: Build Node
+        run: |
+          cd node
+          go build -v -o node-linux-amd64 main.go
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quilibrium-node-binary
+          path: node/node-linux-amd64
