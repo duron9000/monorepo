@@ -20,16 +20,11 @@ jobs:
 
       - name: Install Relic Toolkit with GMP preset
         run: |
-          # 清理可能存在的旧目录
           rm -rf relic
-          
           git clone https://github.com/relic-toolkit/relic.git
           cd relic
           mkdir -p build && cd build
-          
-          # 使用 gmp-pbc-bn254 的配置（使用 GMP 算术后端，更通用）
           ../preset/gmp-pbc-bn254.sh ..
-          
           make -j$(nproc)
           sudo make install
           cd ../..
@@ -37,21 +32,17 @@ jobs:
 
       - name: Install EMP Toolkit
         run: |
-          # 清理可能存在的旧目录
           rm -rf emp-tool emp-ot
-          
-          # 安装 emp-tool (header-only)
           git clone https://github.com/emp-toolkit/emp-tool.git
           cd emp-tool
           cmake . -DCMAKE_BUILD_TYPE=Release
-          sudo make install  # This only installs headers
+          sudo make install
           cd ..
           
-          # 安装 emp-ot (header-only)
           git clone https://github.com/emp-toolkit/emp-ot.git
           cd emp-ot
           cmake . -DCMAKE_BUILD_TYPE=Release
-          sudo make install  # This only installs headers
+          sudo make install
           cd ..
           
           echo "=== Verifying EMP headers and relic library ==="
@@ -67,69 +58,45 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Patch ferret build.rs
+      - name: Create Cargo config with linker flags
         run: |
           cd crates/ferret
-          echo "=== COMPLETE Original build.rs ==="
-          cat build.rs
-          echo "=== END Original build.rs ==="
           
-          cat > build_prepend.txt << 'EOF'
-              // === PATCHED: Add library search paths ===
-              // Note: emp-tool and emp-ot are header-only libraries
-              // We only need to link the underlying dependencies
-              println!("cargo:rustc-link-search=native=/usr/local/lib");
-              println!("cargo:rustc-link-search=native=/usr/lib");
-              println!("cargo:rustc-link-search=native=/usr/lib/x86_64-linux-gnu");
-              
-              // Link relic (required by EMP toolkit)
-              println!("cargo:rustc-link-lib=static=relic_s");
-              
-              // Link system libraries
-              println!("cargo:rustc-link-lib=ssl");
-              println!("cargo:rustc-link-lib=crypto");
-              println!("cargo:rustc-link-lib=gmp");
-              println!("cargo:rustc-link-lib=stdc++");
-              println!("cargo:rustc-link-lib=pthread");
-              println!("cargo:rustc-link-lib=m");
-              println!("cargo:rustc-link-lib=dl");
-              // === END PATCH ===
-          
+          # 创建 .cargo/config.toml 来设置链接器标志
+          mkdir -p .cargo
+          cat > .cargo/config.toml << 'EOF'
+          [build]
+          rustflags = [
+            "-L", "native=/usr/local/lib",
+            "-L", "native=/usr/lib",
+            "-L", "native=/usr/lib/x86_64-linux-gnu",
+            "-l", "static=relic_s",
+            "-l", "ssl",
+            "-l", "crypto",
+            "-l", "gmp",
+            "-l", "stdc++",
+            "-l", "pthread",
+            "-l", "m",
+            "-l", "dl",
+          ]
           EOF
           
-          # Try multiple patterns to find fn main()
-          if grep -q "^fn main() {$" build.rs; then
-            echo "Found pattern: fn main() {"
-            awk '/^fn main\(\) \{$/ {print; system("cat build_prepend.txt"); next} 1' build.rs > build.rs.new
-          elif grep -q "^fn main(){$" build.rs; then
-            echo "Found pattern: fn main(){"
-            awk '/^fn main\(\)\{$/ {print; system("cat build_prepend.txt"); next} 1' build.rs > build.rs.new
-          elif grep -q "fn main()" build.rs; then
-            echo "Found pattern: fn main() (generic)"
-            awk '/fn main\(\)/ {print; system("cat build_prepend.txt"); next} 1' build.rs > build.rs.new
-          else
-            echo "ERROR: Could not find fn main() pattern"
-            exit 1
-          fi
-          
-          mv build.rs.new build.rs
-          
-          echo "=== COMPLETE Patched build.rs ==="
-          cat build.rs
-          echo "=== END Patched build.rs ==="
+          echo "=== Created .cargo/config.toml ==="
+          cat .cargo/config.toml
 
       - name: Build Ferret Library
         run: |
           cd crates/ferret
-          export RUSTFLAGS="-L native=/usr/local/lib"
           export LIBRARY_PATH="/usr/local/lib:/usr/lib:/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH"
           export LD_LIBRARY_PATH="/usr/local/lib:$LD_LIBRARY_PATH"
           export CPATH="/usr/local/include"
           export C_INCLUDE_PATH="/usr/local/include"
           export CPLUS_INCLUDE_PATH="/usr/local/include"
           export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+          
           cargo clean
           cargo build --release --verbose
+          
           mkdir -p ../../node/lib/linux-amd64/
           cp target/release/libferret.a ../../node/lib/linux-amd64/
           echo "=== Generated library ==="
@@ -139,7 +106,6 @@ jobs:
         run: |
           cd node
           export CGO_ENABLED=1
-          # Note: emp-tool and emp-ot are header-only, only link relic and system libs
           export CGO_LDFLAGS="-L$(pwd)/lib/linux-amd64 -L/usr/local/lib -lferret -lrelic_s -lssl -lcrypto -lgmp -lm -ldl -lpthread -lstdc++"
           export CGO_CFLAGS="-I/usr/local/include"
           export GOTOOLCHAIN=local
